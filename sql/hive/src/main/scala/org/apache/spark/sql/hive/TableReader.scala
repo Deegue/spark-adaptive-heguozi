@@ -122,8 +122,33 @@ class HadoopTableReader(
     val inputPathStr = applyFilterIfNeeded(tablePath, filterOpt)
 
     // logDebug("Table input: %s".format(tablePath))
-    val ifc = hiveTable.getInputFormatClass
+    var ifc = hiveTable.getInputFormatClass
       .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+    try {
+      if (sparkSession.conf.get("spark.input.format.class") != null
+        && sparkSession.conf.get("spark.input.format.class") != "") {
+        ifc = Utils.classForName(
+          sparkSession.conf.get("spark.input.format.class"))
+          .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+        hadoopConf.set("mapreduce.input.fileinputformat.split.maxsize",
+          sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
+            (128 * 1024 * 1024).toString))
+        hadoopConf.set("mapreduce.input.fileinputformat.split.minsize",
+          sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
+            (128 * 1024 * 1024).toString))
+        hadoopConf.set("mapreduce.input.fileinputformat.numinputfiles",
+          sparkSession.conf.get("spark.mapreduce.input.fileinputformat.numinputfiles",
+            20.toString))
+        log.error("mapreduce.input.fileinputformat.split.maxsize" +
+          hadoopConf.get("mapreduce.input.fileinputformat.split.maxsize"))
+        log.error("ifc" + ifc.toString)
+        log.error("spark.input.format.class" +
+          sparkSession.conf.get("spark.input.format.class"))
+      }
+    } catch {
+      case _: Exception =>
+        log.error("heguozi-error1")
+    }
     val hadoopRDD = createHadoopRdd(localTableDesc, inputPathStr, ifc)
 
     val attrsWithIndex = attributes.zipWithIndex
@@ -201,8 +226,33 @@ class HadoopTableReader(
       val partDesc = Utilities.getPartitionDesc(partition)
       val partPath = partition.getDataLocation
       val inputPathStr = applyFilterIfNeeded(partPath, filterOpt)
-      val ifc = partDesc.getInputFileFormatClass
+      var ifc = partDesc.getInputFileFormatClass
         .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+      try {
+        if (sparkSession.conf.get("spark.input.format.class") != null
+          && sparkSession.conf.get("spark.input.format.class") != "") {
+          ifc = Utils.classForName(
+            sparkSession.conf.get("spark.input.format.class"))
+            .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+          hadoopConf.set("mapreduce.input.fileinputformat.split.maxsize",
+            sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
+              (256 * 1024 * 1024).toString))
+          hadoopConf.set("mapreduce.input.fileinputformat.split.minsize",
+            sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
+              (256 * 1024 * 1024).toString))
+          hadoopConf.set("mapreduce.input.fileinputformat.numinputfiles",
+            sparkSession.conf.get("spark.mapreduce.input.fileinputformat.numinputfiles",
+              20.toString))
+          log.error("mapreduce.input.fileinputformat.split.maxsize" +
+            hadoopConf.get("mapreduce.input.fileinputformat.split.maxsize"))
+          log.error("ifc" + ifc.toString)
+          log.error("spark.input.format.class" +
+            sparkSession.conf.get("spark.input.format.class"))
+        }
+      } catch {
+        case _: Exception =>
+          log.error("heguozi-error1")
+      }
       // Get partition field info
       val partSpec = partDesc.getPartSpec
       val partProps = partDesc.getProperties
