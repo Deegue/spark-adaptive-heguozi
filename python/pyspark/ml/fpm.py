@@ -165,8 +165,8 @@ class FPGrowth(JavaEstimator, HasItemsCol, HasPredictionCol,
     independent group of mining tasks. The FP-Growth algorithm is described in
     Han et al., Mining frequent patterns without candidate generation [HAN2000]_
 
-    .. [LI2008] http://dx.doi.org/10.1145/1454008.1454027
-    .. [HAN2000] http://dx.doi.org/10.1145/335191.335372
+    .. [LI2008] https://doi.org/10.1145/1454008.1454027
+    .. [HAN2000] https://doi.org/10.1145/335191.335372
 
     .. note:: null values in the feature column are ignored during fit().
     .. note:: Internally `transform` `collects` and `broadcasts` association rules.
