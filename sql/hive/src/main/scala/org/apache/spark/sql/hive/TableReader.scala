@@ -71,7 +71,7 @@ class HadoopTableReader(
 
   // Hadoop honors "mapreduce.job.maps" as hint,
   // but will ignore when mapreduce.jobtracker.address is "local".
-  // https://hadoop.apache.org/docs/r2.6.5/hadoop-mapreduce-client/hadoop-mapreduce-client-core/
+  // https://hadoop.apache.org/docs/r2.7.6/hadoop-mapreduce-client/hadoop-mapreduce-client-core/
   // mapred-default.xml
   //
   // In order keep consistency with Hive, we will let it be 0 in local mode also.
@@ -110,8 +110,9 @@ class HadoopTableReader(
       deserializerClass: Class[_ <: Deserializer],
       filterOpt: Option[PathFilter]): RDD[InternalRow] = {
 
-    assert(!hiveTable.isPartitioned, """makeRDDForTable() cannot be called on a partitioned table,
-      since input formats may differ across partitions. Use makeRDDForTablePartitions() instead.""")
+    assert(!hiveTable.isPartitioned,
+      "makeRDDForTable() cannot be called on a partitioned table, since input formats may " +
+      "differ across partitions. Use makeRDDForPartitionedTable() instead.")
 
     // Create local references to member variables, so that the entire `this` object won't be
     // serialized in the closure below.
@@ -122,33 +123,7 @@ class HadoopTableReader(
     val inputPathStr = applyFilterIfNeeded(tablePath, filterOpt)
 
     // logDebug("Table input: %s".format(tablePath))
-    var ifc = hiveTable.getInputFormatClass
-      .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
-    try {
-      if (sparkSession.conf.get("spark.input.format.class") != null
-        && sparkSession.conf.get("spark.input.format.class") != "") {
-        ifc = Utils.classForName(
-          sparkSession.conf.get("spark.input.format.class"))
-          .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
-        hadoopConf.set("mapreduce.input.fileinputformat.split.maxsize",
-          sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
-            (128 * 1024 * 1024).toString))
-        hadoopConf.set("mapreduce.input.fileinputformat.split.minsize",
-          sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
-            (128 * 1024 * 1024).toString))
-        hadoopConf.set("mapreduce.input.fileinputformat.numinputfiles",
-          sparkSession.conf.get("spark.mapreduce.input.fileinputformat.numinputfiles",
-            20.toString))
-        log.error("mapreduce.input.fileinputformat.split.maxsize" +
-          hadoopConf.get("mapreduce.input.fileinputformat.split.maxsize"))
-        log.error("ifc" + ifc.toString)
-        log.error("spark.input.format.class" +
-          sparkSession.conf.get("spark.input.format.class"))
-      }
-    } catch {
-      case _: Exception =>
-        log.error("heguozi-error1")
-    }
+    val ifc = getAndOptimizeInput(hiveTable.getInputFormatClass.getName)
     val hadoopRDD = createHadoopRdd(localTableDesc, inputPathStr, ifc)
 
     val attrsWithIndex = attributes.zipWithIndex
@@ -156,7 +131,7 @@ class HadoopTableReader(
 
     val deserializedHadoopRDD = hadoopRDD.mapPartitions { iter =>
       val hconf = broadcastedHadoopConf.value.value
-      val deserializer = deserializerClass.newInstance()
+      val deserializer = deserializerClass.getConstructor().newInstance()
       deserializer.initialize(hconf, localTableDesc.getProperties)
       HadoopTableReader.fillObject(iter, deserializer, attrsWithIndex, mutableRow, deserializer)
     }
@@ -188,7 +163,7 @@ class HadoopTableReader(
     def verifyPartitionPath(
         partitionToDeserializer: Map[HivePartition, Class[_ <: Deserializer]]):
         Map[HivePartition, Class[_ <: Deserializer]] = {
-      if (!sparkSession.sessionState.conf.verifyPartitionPath) {
+      if (!conf.verifyPartitionPath) {
         partitionToDeserializer
       } else {
         val existPathSet = collection.mutable.Set[String]()
@@ -226,33 +201,7 @@ class HadoopTableReader(
       val partDesc = Utilities.getPartitionDesc(partition)
       val partPath = partition.getDataLocation
       val inputPathStr = applyFilterIfNeeded(partPath, filterOpt)
-      var ifc = partDesc.getInputFileFormatClass
-        .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
-      try {
-        if (sparkSession.conf.get("spark.input.format.class") != null
-          && sparkSession.conf.get("spark.input.format.class") != "") {
-          ifc = Utils.classForName(
-            sparkSession.conf.get("spark.input.format.class"))
-            .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
-          hadoopConf.set("mapreduce.input.fileinputformat.split.maxsize",
-            sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
-              (256 * 1024 * 1024).toString))
-          hadoopConf.set("mapreduce.input.fileinputformat.split.minsize",
-            sparkSession.conf.get("spark.mapreduce.input.fileinputformat.split.maxsize",
-              (256 * 1024 * 1024).toString))
-          hadoopConf.set("mapreduce.input.fileinputformat.numinputfiles",
-            sparkSession.conf.get("spark.mapreduce.input.fileinputformat.numinputfiles",
-              20.toString))
-          log.error("mapreduce.input.fileinputformat.split.maxsize" +
-            hadoopConf.get("mapreduce.input.fileinputformat.split.maxsize"))
-          log.error("ifc" + ifc.toString)
-          log.error("spark.input.format.class" +
-            sparkSession.conf.get("spark.input.format.class"))
-        }
-      } catch {
-        case _: Exception =>
-          log.error("heguozi-error1")
-      }
+      val ifc = getAndOptimizeInput(partDesc.getInputFileFormatClassName)
       // Get partition field info
       val partSpec = partDesc.getPartSpec
       val partProps = partDesc.getProperties
@@ -294,7 +243,7 @@ class HadoopTableReader(
       val localTableDesc = tableDesc
       createHadoopRdd(localTableDesc, inputPathStr, ifc).mapPartitions { iter =>
         val hconf = broadcastedHiveConf.value.value
-        val deserializer = localDeserializer.newInstance()
+        val deserializer = localDeserializer.getConstructor().newInstance()
         // SPARK-13709: For SerDes like AvroSerDe, some essential information (e.g. Avro schema
         // information) may be defined in table properties. Here we should merge table properties
         // and partition properties before initializing the deserializer. Note that partition
@@ -306,7 +255,7 @@ class HadoopTableReader(
         }
         deserializer.initialize(hconf, props)
         // get the table deserializer
-        val tableSerDe = localTableDesc.getDeserializerClass.newInstance()
+        val tableSerDe = localTableDesc.getDeserializerClass.getConstructor().newInstance()
         tableSerDe.initialize(hconf, localTableDesc.getProperties)
 
         // fill the non partition key attributes
@@ -359,6 +308,36 @@ class HadoopTableReader(
 
     // Only take the value (skip the key) because Hive works only with values.
     rdd.map(_._2)
+  }
+
+  /**
+   * If `spark.sql.hive.fileInputFormat.enabled` is true, this function will optimize the input
+   * method(including format and the size of splits) while reading Hive tables.
+   */
+  private def getAndOptimizeInput(
+    inputClassName: String): Class[InputFormat[Writable, Writable]] = {
+
+    var ifc = Utils.classForName(inputClassName)
+      .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+    if (conf.getConf(HiveUtils.HIVE_FILE_INPUT_FORMAT_ENABLED)) {
+      hadoopConf.set("mapreduce.input.fileinputformat.split.maxsize",
+        conf.getConf(HiveUtils.HIVE_FILE_INPUT_FORMAT_SPLIT_MAXSIZE).toString)
+      hadoopConf.set("mapreduce.input.fileinputformat.split.minsize",
+        conf.getConf(HiveUtils.HIVE_FILE_INPUT_FORMAT_SPLIT_MINSIZE).toString)
+      if ("org.apache.hadoop.mapreduce.lib.input.TextInputFormat"
+        .equals(inputClassName)) {
+        ifc = Utils.classForName(
+          "org.apache.hadoop.mapreduce.lib.input.CombineTextInputFormat")
+          .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+      }
+      if ("org.apache.hadoop.mapred.TextInputFormat"
+        .equals(inputClassName)) {
+        ifc = Utils.classForName(
+          "org.apache.hadoop.mapred.lib.CombineTextInputFormat")
+          .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
+      }
+    }
+    ifc
   }
 }
 
@@ -431,7 +410,7 @@ private[hive] object HadoopTableReader extends HiveInspectors with Logging {
 
     val (fieldRefs, fieldOrdinals) = nonPartitionKeyAttrs.map { case (attr, ordinal) =>
       soi.getStructFieldRef(attr.name) -> ordinal
-    }.unzip
+    }.toArray.unzip
 
     /**
      * Builds specific unwrappers ahead of time according to object inspector
